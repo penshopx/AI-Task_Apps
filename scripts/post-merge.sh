@@ -5,4 +5,5 @@ cd "$(dirname "$0")/.."
 
 # Keep dependency setup deterministic and safe when stdin is closed by the merge hook.
 npm ci --no-audit --no-fund
+node scripts/migrate-development-db.js
 npm test
