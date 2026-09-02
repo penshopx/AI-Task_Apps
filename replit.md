@@ -1,13 +1,13 @@
 # FocusBoard
 
-FocusBoard adalah aplikasi tugas personal berbasis web untuk mengelola tugas berdasarkan kategori, prioritas, dan deadline.
+FocusBoard adalah aplikasi tugas personal berbasis web untuk mengelola tugas berdasarkan kategori, prioritas, dan deadline. Tugas disimpan di PostgreSQL dan dapat dibuka dari perangkat lain menggunakan kode ruang kerja yang sama.
 
 ## Menjalankan di Replit
 
-Workflow aplikasi menjalankan server statis pada port `5000`:
+Workflow aplikasi menjalankan server Node pada port `5000`:
 
 ```bash
-python3 -m http.server 5000 --bind 0.0.0.0
+npm start
 ```
 
 Buka preview Replit untuk menggunakan aplikasi.
@@ -26,4 +26,10 @@ node --test tests/task-utils.test.js
 - Deadline hari ini, 7 hari ke depan, serta penanda terlambat.
 - Pencarian dan filter berdasarkan status, kategori, prioritas, dan deadline.
 - Statistik ringkasan dan distribusi kategori.
-- Data tersimpan otomatis di `localStorage` browser.
+- Data tersimpan otomatis di PostgreSQL.
+- Kode ruang kerja dapat digunakan untuk membuka daftar tugas yang sama di perangkat lain.
+- `localStorage` digunakan sebagai cache lokal dan untuk migrasi data versi lama.
+
+## Sinkronisasi perangkat
+
+Klik kode **Ruang tersinkron** di header aplikasi. Masukkan kode yang sama pada perangkat lain untuk mengakses ruang tugas yang sama. Kode ruang kerja bukan password; jangan gunakan informasi pribadi sebagai kode.

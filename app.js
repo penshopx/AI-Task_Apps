@@ -1,6 +1,8 @@
 import { addDays, APP_TIME_ZONE, filterTasks, isOverdue, isToday, parseStoredTasks, today } from "./task-utils.js";
 
 const STORAGE_KEY = "focusboard.tasks.v2";
+const WORKSPACE_KEY = "focusboard.workspace.v1";
+const MIGRATION_KEY = "focusboard.workspace.migrated.v1";
 const CATEGORY_CLASS = { Kerja: "work", Pribadi: "personal", Belajar: "learning", Keuangan: "finance" };
 const PRIORITY_LABEL = { high: "Tinggi", medium: "Sedang", low: "Rendah" };
 const CATEGORY_NAMES = ["Kerja", "Pribadi", "Belajar", "Keuangan"];
@@ -14,16 +16,32 @@ const seedTasks = [
   { id: "seed-6", title: "Rancang flow onboarding", category: "Kerja", priority: "medium", dueDate: addDays(0), notes: "", completed: true, createdAt: Date.now() - 12400000 },
 ];
 
+function createWorkspaceCode() {
+  return `RUANG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+function loadWorkspaceCode() {
+  const stored = localStorage.getItem(WORKSPACE_KEY);
+  if (stored && /^[A-Za-z0-9-]{4,32}$/.test(stored)) return stored.toUpperCase();
+  const created = createWorkspaceCode();
+  localStorage.setItem(WORKSPACE_KEY, created);
+  return created;
+}
+
+let workspaceCode = loadWorkspaceCode();
 let tasks = loadTasks();
 let activeView = "dashboard";
 let editingTaskId = null;
+let canMigrateLocal = localStorage.getItem(MIGRATION_KEY) !== workspaceCode;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function loadTasks() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  return parseStoredTasks(stored, seedTasks);
+  return parseStoredTasks(localStorage.getItem(STORAGE_KEY), seedTasks).map((task) => ({
+    ...task,
+    dueDate: typeof task.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate) ? task.dueDate : "",
+  }));
 }
 
 function saveTasks() {
@@ -31,6 +49,65 @@ function saveTasks() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   } catch (error) {
     console.warn("Perubahan tidak dapat disimpan di browser.", error);
+  }
+}
+
+function setSyncStatus(state, message) {
+  const dot = $("#syncDot");
+  const copy = $("#workspaceCodeLabel");
+  if (copy) copy.textContent = workspaceCode;
+  if (!dot) return;
+  dot.className = state;
+  dot.title = message;
+}
+
+function setNotice(message, state = "error") {
+  const notice = $("#syncNotice");
+  if (!notice) return;
+  notice.textContent = message;
+  notice.className = `sync-notice ${state}`;
+  notice.hidden = false;
+  window.clearTimeout(setNotice.timeout);
+  setNotice.timeout = window.setTimeout(() => { notice.hidden = true; }, 4500);
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Tidak dapat terhubung ke server");
+  return payload;
+}
+
+async function syncWorkspace({ migrateLocal = false } = {}) {
+  setSyncStatus("syncing", "Menyinkronkan tugas...");
+  try {
+    const params = `?workspace=${encodeURIComponent(workspaceCode)}`;
+    const payload = await apiRequest(`/api/tasks${params}`);
+    if (migrateLocal && tasks.length) {
+      for (const task of tasks) {
+        await apiRequest("/api/tasks", {
+          method: "POST",
+          body: JSON.stringify({ workspaceCode, task }),
+        });
+      }
+      const refreshed = await apiRequest(`/api/tasks${params}`);
+      tasks = refreshed.tasks;
+    } else {
+      tasks = payload.tasks;
+    }
+    canMigrateLocal = false;
+    localStorage.setItem(MIGRATION_KEY, workspaceCode);
+    saveTasks();
+    setSyncStatus("synced", "Tugas tersinkron");
+    render();
+    return true;
+  } catch (error) {
+    setSyncStatus("error", "Sinkronisasi gagal");
+    setNotice(`Sinkronisasi gagal: ${error.message}. Perubahan belum dikirim.`, "error");
+    return false;
   }
 }
 
@@ -42,7 +119,10 @@ function escapeHtml(value = "") {
 
 function formatDate(dateString) {
   if (!dateString) return "Tanpa deadline";
-  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(new Date(`${dateString}T12:00:00`));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return "Deadline belum valid";
+  const date = new Date(`${dateString}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "Deadline belum valid";
+  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(date);
 }
 
 function getFilteredTasks() {
@@ -161,6 +241,44 @@ function render() {
   renderCategoryBars();
   updateSectionLabels();
   renderTasks();
+  if ($("#workspaceCodeLabel")) $("#workspaceCodeLabel").textContent = workspaceCode;
+}
+
+function openWorkspaceModal() {
+  $("#workspaceCodeInput").value = workspaceCode;
+  $("#workspaceModal").hidden = false;
+  document.body.style.overflow = "hidden";
+  setTimeout(() => $("#workspaceCodeInput").focus(), 50);
+}
+
+function closeWorkspaceModal() {
+  $("#workspaceModal").hidden = true;
+  document.body.style.overflow = "";
+}
+
+async function submitWorkspace(event) {
+  event.preventDefault();
+  const nextCode = $("#workspaceCodeInput").value.trim().toUpperCase();
+  if (!/^[A-Z0-9-]{4,32}$/.test(nextCode)) return;
+  if (nextCode === workspaceCode) {
+    closeWorkspaceModal();
+    return;
+  }
+  const previousCode = workspaceCode;
+  const previousTasks = tasks;
+  workspaceCode = nextCode;
+  localStorage.setItem(WORKSPACE_KEY, workspaceCode);
+  canMigrateLocal = false;
+  tasks = [];
+  closeWorkspaceModal();
+  render();
+  const connected = await syncWorkspace();
+  if (!connected) {
+    workspaceCode = previousCode;
+    localStorage.setItem(WORKSPACE_KEY, previousCode);
+    tasks = previousTasks;
+    render();
+  }
 }
 
 function openModal(task = null) {
@@ -184,7 +302,7 @@ function closeModal() {
   editingTaskId = null;
 }
 
-function submitTask(event) {
+async function submitTask(event) {
   event.preventDefault();
   const taskData = {
     title: $("#taskTitle").value.trim(),
@@ -194,32 +312,69 @@ function submitTask(event) {
     notes: $("#taskNotes").value.trim(),
   };
   if (!taskData.title) return;
-  if (editingTaskId) {
-    tasks = tasks.map((task) => task.id === editingTaskId ? { ...task, ...taskData } : task);
-  } else {
-    tasks.push({ ...taskData, id: `task-${Date.now()}`, completed: false, createdAt: Date.now() });
+  try {
+    if (editingTaskId) {
+      const saved = await apiRequest(`/api/tasks/${encodeURIComponent(editingTaskId)}?workspace=${encodeURIComponent(workspaceCode)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ task: taskData }),
+      });
+      tasks = tasks.map((task) => task.id === editingTaskId ? saved.task : task);
+    } else {
+      const task = { ...taskData, id: `task-${Date.now()}`, completed: false, createdAt: Date.now() };
+      const saved = await apiRequest("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({ workspaceCode, task }),
+      });
+      tasks.push(saved.task);
+    }
+  } catch (error) {
+    setSyncStatus("error", "Perubahan belum tersimpan");
+    setNotice(`Perubahan belum tersimpan: ${error.message}`, "error");
+    return;
   }
   saveTasks();
+  setSyncStatus("synced", "Tugas tersinkron");
   closeModal();
   render();
 }
 
-function deleteTask(id) {
+async function deleteTask(id) {
   const task = tasks.find((item) => item.id === id);
   if (!task || !window.confirm(`Hapus tugas "${task.title}"?`)) return;
-  tasks = tasks.filter((item) => item.id !== id);
+  try {
+    await apiRequest(`/api/tasks/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceCode)}`, { method: "DELETE" });
+    tasks = tasks.filter((item) => item.id !== id);
+  } catch (error) {
+    setSyncStatus("error", "Tugas belum terhapus");
+    setNotice(`Tugas belum terhapus: ${error.message}`, "error");
+    return;
+  }
   saveTasks();
+  setSyncStatus("synced", "Tugas tersinkron");
   render();
 }
 
-function handleTaskAction(event) {
+async function handleTaskAction(event) {
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton) return;
   const { action, id } = actionButton.dataset;
   if (action === "add") openModal();
   if (action === "toggle") {
-    tasks = tasks.map((task) => task.id === id ? { ...task, completed: !task.completed } : task);
+    const current = tasks.find((task) => task.id === id);
+    if (!current) return;
+    try {
+      const saved = await apiRequest(`/api/tasks/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceCode)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ task: { ...current, completed: !current.completed } }),
+      });
+      tasks = tasks.map((task) => task.id === id ? saved.task : task);
+    } catch (error) {
+      setSyncStatus("error", "Status belum tersimpan");
+      setNotice(`Status belum tersimpan: ${error.message}`, "error");
+      return;
+    }
     saveTasks();
+    setSyncStatus("synced", "Tugas tersinkron");
     render();
   }
   if (action === "edit") openModal(tasks.find((task) => task.id === id));
@@ -245,14 +400,33 @@ $("#taskForm").addEventListener("submit", submitTask);
 $("#closeModalButton").addEventListener("click", closeModal);
 $("#cancelModalButton").addEventListener("click", closeModal);
 $("#taskModal").addEventListener("click", (event) => { if (event.target === $("#taskModal")) closeModal(); });
-document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("#taskModal").hidden) closeModal(); });
-$("#clearCompletedButton").addEventListener("click", () => {
+$("#workspaceButton").addEventListener("click", openWorkspaceModal);
+$("#workspaceForm").addEventListener("submit", submitWorkspace);
+$("#closeWorkspaceButton").addEventListener("click", closeWorkspaceModal);
+$("#cancelWorkspaceButton").addEventListener("click", closeWorkspaceModal);
+$("#workspaceModal").addEventListener("click", (event) => { if (event.target === $("#workspaceModal")) closeWorkspaceModal(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!$("#taskModal").hidden) closeModal();
+  if (!$("#workspaceModal").hidden) closeWorkspaceModal();
+});
+$("#clearCompletedButton").addEventListener("click", async () => {
   if (!tasks.some((task) => task.completed)) return;
   if (window.confirm("Hapus semua tugas yang sudah selesai?")) {
-    tasks = tasks.filter((task) => !task.completed);
+    const completedTasks = tasks.filter((task) => task.completed);
+    try {
+      await Promise.all(completedTasks.map((task) => apiRequest(`/api/tasks/${encodeURIComponent(task.id)}?workspace=${encodeURIComponent(workspaceCode)}`, { method: "DELETE" })));
+      tasks = tasks.filter((task) => !task.completed);
+    } catch (error) {
+      setSyncStatus("error", "Tugas selesai belum terhapus");
+      setNotice(`Tugas selesai belum terhapus: ${error.message}`, "error");
+      return;
+    }
     saveTasks();
+    setSyncStatus("synced", "Tugas tersinkron");
     render();
   }
 });
 
 render();
+syncWorkspace({ migrateLocal: canMigrateLocal });
