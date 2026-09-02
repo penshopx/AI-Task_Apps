@@ -1,0 +1,1 @@
+- [PostgreSQL date values](postgres-date-values.md) — normalize DATE columns before returning them to browser clients.

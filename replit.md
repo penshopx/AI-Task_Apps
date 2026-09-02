@@ -18,6 +18,10 @@ Buka preview Replit untuk menggunakan aplikasi.
 node --test tests/task-utils.test.js
 ```
 
+## Setup setelah merge
+
+Replit menjalankan `scripts/post-merge.sh` setelah task merge. Script ini melakukan instalasi dependency secara non-interaktif dengan `npm ci`, lalu menjalankan test sebelum workflow direkonsiliasi.
+
 ## Fitur
 
 - Membuat, mengedit, menandai selesai, dan menghapus tugas.
