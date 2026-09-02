@@ -7,6 +7,14 @@ const CATEGORY_CLASS = { Kerja: "work", Pribadi: "personal", Belajar: "learning"
 const PRIORITY_LABEL = { high: "Tinggi", medium: "Sedang", low: "Rendah" };
 const CATEGORY_NAMES = ["Kerja", "Pribadi", "Belajar", "Keuangan"];
 
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const isValidDate = (dateString) => {
+  if (!dateString || !DATE_PATTERN.test(dateString)) return false;
+  const date = new Date(`${dateString}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateString;
+};
+
 const seedTasks = [
   { id: "seed-1", title: "Finalisasi proposal klien", category: "Kerja", priority: "high", dueDate: addDays(0), notes: "Periksa angka dan lampiran sebelum dikirim.", completed: false, createdAt: Date.now() - 8400000 },
   { id: "seed-2", title: "Jadwalkan review sprint", category: "Kerja", priority: "medium", dueDate: addDays(1), notes: "", completed: false, createdAt: Date.now() - 7200000 },
@@ -38,12 +46,46 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function loadTasks() {
-  return parseStoredTasks(localStorage.getItem(STORAGE_KEY), seedTasks).map((task) => ({
-    ...task,
-    dueDate: typeof task.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate) ? task.dueDate : "",
-  }));
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const parsed = parseStoredTasks(stored, null);
+    if (Array.isArray(parsed)) {
+      const restored = [];
+      const usedIds = new Set();
+      parsed.forEach((task, index) => {
+        const normalized = normalizeTask(task, index, usedIds);
+        if (normalized) {
+          restored.push(normalized);
+          usedIds.add(normalized.id);
+        }
+      });
+      if (parsed.length === 0 || restored.length > 0) return restored;
+    }
+  } catch (error) {
+    console.warn("Penyimpanan lokal tidak dapat dibaca.", error);
+  }
+  return seedTasks.map((task) => ({ ...task }));
 }
 
+function normalizeTask(task, index, usedIds) {
+  if (!task || typeof task !== "object" || Array.isArray(task)) return null;
+  const title = typeof task.title === "string" ? task.title.trim() : "";
+  if (!title) return null;
+
+  let id = typeof task.id === "string" && task.id.trim() ? task.id : `restored-${index}`;
+  while (usedIds.has(id)) id = `${id}-${index}`;
+
+  return {
+    id,
+    title,
+    category: CATEGORY_NAMES.includes(task.category) ? task.category : "Kerja",
+    priority: Object.hasOwn(PRIORITY_LABEL, task.priority) ? task.priority : "medium",
+    dueDate: task.dueDate === "" ? "" : isValidDate(task.dueDate) ? task.dueDate : "",
+    notes: typeof task.notes === "string" ? task.notes.trim() : "",
+    completed: task.completed === true,
+    createdAt: Number.isFinite(task.createdAt) ? task.createdAt : Date.now() - index,
+  };
+}
 function saveTasks() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
@@ -119,10 +161,8 @@ function escapeHtml(value = "") {
 
 function formatDate(dateString) {
   if (!dateString) return "Tanpa deadline";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return "Deadline belum valid";
-  const date = new Date(`${dateString}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return "Deadline belum valid";
-  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(date);
+  if (!isValidDate(dateString)) return "Deadline belum valid";
+  return new Intl.DateTimeFormat("id-ID", { timeZone: APP_TIME_ZONE, day: "numeric", month: "short" }).format(new Date(`${dateString}T12:00:00Z`));
 }
 
 function getFilteredTasks() {
@@ -378,7 +418,7 @@ async function handleTaskAction(event) {
     render();
   }
   if (action === "edit") openModal(tasks.find((task) => task.id === id));
-  if (action === "delete") deleteTask(id);
+  if (action === "delete") await deleteTask(id);
 }
 
 $$(".nav-item").forEach((button) => button.addEventListener("click", () => {
@@ -392,7 +432,11 @@ $$(".category-nav-item").forEach((button) => button.addEventListener("click", ()
   render();
 }));
 
-["#searchInput", "#categoryFilter", "#priorityFilter", "#dateFilter"].forEach((selector) => $(selector).addEventListener("input", render));
+$("#searchInput").addEventListener("input", render);
+["#categoryFilter", "#priorityFilter", "#dateFilter"].forEach((selector) => {
+  $(selector).addEventListener("input", render);
+  $(selector).addEventListener("change", render);
+});
 $("#taskList").addEventListener("click", handleTaskAction);
 $("#addTaskButton").addEventListener("click", () => openModal());
 $("#quickAddButton").addEventListener("click", () => openModal());
