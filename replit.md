@@ -12,6 +12,12 @@ python3 -m http.server 5000 --bind 0.0.0.0
 
 Buka preview Replit untuk menggunakan aplikasi.
 
+## Menjalankan test
+
+```bash
+node --test tests/task-utils.test.js
+```
+
 ## Fitur
 
 - Membuat, mengedit, menandai selesai, dan menghapus tugas.

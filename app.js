@@ -1,27 +1,9 @@
+import { addDays, APP_TIME_ZONE, filterTasks, isOverdue, isToday, parseStoredTasks, today } from "./task-utils.js";
+
 const STORAGE_KEY = "focusboard.tasks.v2";
-const APP_TIME_ZONE = "Asia/Bangkok";
 const CATEGORY_CLASS = { Kerja: "work", Pribadi: "personal", Belajar: "learning", Keuangan: "finance" };
 const PRIORITY_LABEL = { high: "Tinggi", medium: "Sedang", low: "Rendah" };
 const CATEGORY_NAMES = ["Kerja", "Pribadi", "Belajar", "Keuangan"];
-
-const isoDate = (date) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(date)).reduce((result, part) => {
-    if (part.type !== "literal") result[part.type] = part.value;
-    return result;
-  }, {});
-  return `${parts.year}-${parts.month}-${parts.day}`;
-};
-const today = () => isoDate(new Date());
-const addDays = (days) => {
-  const date = new Date(`${today()}T12:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-};
 
 const seedTasks = [
   { id: "seed-1", title: "Finalisasi proposal klien", category: "Kerja", priority: "high", dueDate: addDays(0), notes: "Periksa angka dan lampiran sebelum dikirim.", completed: false, createdAt: Date.now() - 8400000 },
@@ -40,16 +22,8 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function loadTasks() {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (error) {
-    console.warn("Penyimpanan lokal tidak dapat dibaca.", error);
-  }
-  return seedTasks;
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return parseStoredTasks(stored, seedTasks);
 }
 
 function saveTasks() {
@@ -71,41 +45,14 @@ function formatDate(dateString) {
   return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(new Date(`${dateString}T12:00:00`));
 }
 
-function isOverdue(task) {
-  return !task.completed && task.dueDate && task.dueDate < today();
-}
-
-function isToday(task) {
-  return task.dueDate === today();
-}
-
-function isWithinNextWeek(task) {
-  if (!task.dueDate) return false;
-  return task.dueDate >= today() && task.dueDate <= addDays(7);
-}
-
 function getFilteredTasks() {
-  const search = $("#searchInput").value.trim().toLowerCase();
-  const category = $("#categoryFilter").value;
-  const priority = $("#priorityFilter").value;
-  const date = $("#dateFilter").value;
-  return tasks
-    .filter((task) => {
-      if (activeView === "active" && task.completed) return false;
-      if (activeView === "completed" && !task.completed) return false;
-      if (category !== "all" && task.category !== category) return false;
-      if (priority !== "all" && task.priority !== priority) return false;
-      if (date === "today" && !isToday(task)) return false;
-      if (date === "week" && !isWithinNextWeek(task)) return false;
-      if (date === "overdue" && !isOverdue(task)) return false;
-      if (search && !`${task.title} ${task.category} ${task.notes || ""}`.toLowerCase().includes(search)) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      if (a.completed !== b.completed) return Number(a.completed) - Number(b.completed);
-      if (isOverdue(a) !== isOverdue(b)) return Number(isOverdue(b)) - Number(isOverdue(a));
-      return (a.dueDate || "9999-12-31").localeCompare(b.dueDate || "9999-12-31") || b.createdAt - a.createdAt;
-    });
+  return filterTasks(tasks, {
+    view: activeView,
+    search: $("#searchInput").value,
+    category: $("#categoryFilter").value,
+    priority: $("#priorityFilter").value,
+    date: $("#dateFilter").value,
+  });
 }
 
 function renderDate() {
